@@ -31,8 +31,10 @@ Failed testing is fixed in the appropriate feature branch and tested again.
           │              │              │
           ▼
                             
-   feature/login  feature/product  feature/cart
-   Developer 1     Developer 2      Developer 3
+   feature/login      feature/product     feature/cart
+   
+   Developer 1        Developer 2      Developer 3
+
 
           │              │              │
           └──────────────┼──────────────┘
