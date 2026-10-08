@@ -26,20 +26,28 @@ Failed testing is fixed in the appropriate feature branch and tested again.
                   iteration-1
                 Week 1 Development
                          │
+   
           ┌──────────────┼──────────────┐
           │              │              │
-          ▼              ▼              ▼
+          ▼
+                            
    feature/login  feature/product  feature/cart
    Developer 1     Developer 2      Developer 3
+
           │              │              │
           └──────────────┼──────────────┘
                          │
+   
                     Pull Requests
+   
                          │
                          ▼
+   
                   iteration-1
                 Integration Testing
+   
                          │
+   
                     QA Testing
                          │
                   ┌──────┴──────┐
@@ -60,7 +68,7 @@ Failed testing is fixed in the appropriate feature branch and tested again.
                   │
              Repeat Process
 
-3. DEVELOPER WORKFLOW
+4. DEVELOPER WORKFLOW
    ------------------
    
 Step 1: Checkout the iteration branch
