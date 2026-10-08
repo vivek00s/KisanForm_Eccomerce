@@ -1,0 +1,59 @@
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Secrets / local env (NEVER commit) ###
+.env
+.env.local
+*.env
+twilio.env
+run-with-twilio.ps1.local
+
+### Frontend ###
+frontend/node_modules/
+frontend/dist/
+
+### Local logs / temp files from development ###
+build.log
+compile-out.txt
+*-out.txt
+npmlog.txt
+buildlog.txt
+install24.txt
+vite-build.txt
+classes.txt
+
+gitcheck.txt
+gitstage.txt
+gitpush.txt
+verify-flows.ps1
