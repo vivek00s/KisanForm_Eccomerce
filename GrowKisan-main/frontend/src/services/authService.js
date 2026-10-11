@@ -1,6 +1,6 @@
 import api from './api'
 
-// Request an OTP to be sent to the given mobile number (backend calls Twilio).
+// Request an OTP to be sent to the given mobile number (backend calls the OTP provider).
 export async function sendOtp(mobile) {
   const res = await api.post('/auth/send-otp', { mobile })
   return res.data

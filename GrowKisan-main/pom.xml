@@ -38,13 +38,6 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Twilio SDK for OTP (Verify). Used only when the Twilio provider is active. -->
-        <dependency>
-            <groupId>com.twilio.sdk</groupId>
-            <artifactId>twilio</artifactId>
-            <version>10.6.3</version>
-        </dependency>
-
         <!-- Stripe SDK for payments. Used only when the Stripe provider is active. -->
         <dependency>
             <groupId>com.stripe</groupId>

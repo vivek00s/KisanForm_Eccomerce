@@ -30,6 +30,7 @@ public class OtpRequestDaoImpl implements OtpRequestDao {
             rs.getString("provider"),
             rs.getString("provider_ref"),
             rs.getString("code_hash"),
+            rs.getString("request_ip"),
             rs.getString("status"),
             rs.getInt("attempts"),
             rs.getTimestamp("expires_at") != null ? rs.getTimestamp("expires_at").toInstant() : null,
@@ -38,8 +39,8 @@ public class OtpRequestDaoImpl implements OtpRequestDao {
 
     @Override
     public Long save(OtpRequest o) {
-        String sql = "INSERT INTO otp_requests (mobile, provider, provider_ref, code_hash, status, attempts, expires_at) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO otp_requests (mobile, provider, provider_ref, code_hash, request_ip, status, attempts, expires_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
         KeyHolder kh = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS);
@@ -47,9 +48,10 @@ public class OtpRequestDaoImpl implements OtpRequestDao {
             ps.setString(2, o.getProvider());
             ps.setString(3, o.getProviderRef());
             ps.setString(4, o.getCodeHash());
-            ps.setString(5, o.getStatus() != null ? o.getStatus() : "PENDING");
-            ps.setInt(6, o.getAttempts());
-            ps.setTimestamp(7, o.getExpiresAt() != null ? Timestamp.from(o.getExpiresAt()) : null);
+            ps.setString(5, o.getRequestIp());
+            ps.setString(6, o.getStatus() != null ? o.getStatus() : "PENDING");
+            ps.setInt(7, o.getAttempts());
+            ps.setTimestamp(8, o.getExpiresAt() != null ? Timestamp.from(o.getExpiresAt()) : null);
             return ps;
         }, kh);
         Number key = kh.getKey();
@@ -80,5 +82,32 @@ public class OtpRequestDaoImpl implements OtpRequestDao {
                 "SELECT COUNT(*) FROM otp_requests WHERE mobile = ? AND created_at >= ?",
                 Integer.class, mobile, Timestamp.from(since));
         return c != null ? c : 0;
+    }
+
+    @Override
+    public int countSinceForUpdate(String mobile, Instant since) {
+        // Row-lock the matching rows so concurrent sends for the same mobile
+        // serialize. Must run inside a transaction (enforced by the service).
+        List<Long> ids = jdbc.query(
+                "SELECT id FROM otp_requests WHERE mobile = ? AND created_at >= ? FOR UPDATE",
+                (rs, n) -> rs.getLong("id"), mobile, Timestamp.from(since));
+        return ids.size();
+    }
+
+    @Override
+    public int countByIpSince(String requestIp, Instant since) {
+        if (requestIp == null || requestIp.isBlank()) return 0;
+        Integer c = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM otp_requests WHERE request_ip = ? AND created_at >= ?",
+                Integer.class, requestIp, Timestamp.from(since));
+        return c != null ? c : 0;
+    }
+
+    @Override
+    public int markVerifiedIfPending(Long id) {
+        // Atomic single-use transition. Only the first concurrent caller for a
+        // PENDING row updates 1 row; any later/duplicate caller updates 0.
+        return jdbc.update(
+                "UPDATE otp_requests SET status = 'VERIFIED' WHERE id = ? AND status = 'PENDING'", id);
     }
 }
