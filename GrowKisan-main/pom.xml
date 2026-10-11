@@ -52,6 +52,13 @@
             <version>26.9.0</version>
         </dependency>
 
+        <!-- Razorpay SDK for payments. Used only when the Razorpay provider is active. -->
+        <dependency>
+            <groupId>com.razorpay</groupId>
+            <artifactId>razorpay-java</artifactId>
+            <version>1.4.10</version>
+        </dependency>
+
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

@@ -63,12 +63,14 @@ public class StripePaymentProvider implements PaymentProvider {
     }
 
     @Override
-    public boolean verifyPayment(String providerPaymentId) {
+    public boolean verifyPayment(Confirmation confirmation, String storedProviderPaymentId) {
+        String intentId = confirmation != null && confirmation.providerPaymentId() != null
+                ? confirmation.providerPaymentId() : storedProviderPaymentId;
         try {
-            PaymentIntent intent = PaymentIntent.retrieve(providerPaymentId);
+            PaymentIntent intent = PaymentIntent.retrieve(intentId);
             return "succeeded".equals(intent.getStatus());
         } catch (Exception e) {
-            log.warn("Stripe verify failed for {}: {}", providerPaymentId, e.getMessage());
+            log.warn("Stripe verify failed for {}: {}", intentId, e.getMessage());
             return false;
         }
     }
