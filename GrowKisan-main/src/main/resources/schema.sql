@@ -61,21 +61,29 @@ CREATE TABLE IF NOT EXISTS users (
     UNIQUE KEY uk_users_mobile (mobile)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- OTP requests. We do NOT store the raw OTP when using Twilio Verify (Twilio
--- holds it). For the local mock provider we store a hash only, never plain text.
+-- OTP requests. We never store the raw OTP: with 2Factor the provider owns it
+-- and we keep only its session id in provider_ref. request_ip is captured for
+-- per-IP rate limiting. created_at drives per-mobile and per-IP send limits.
 CREATE TABLE IF NOT EXISTS otp_requests (
     id            BIGINT AUTO_INCREMENT PRIMARY KEY,
     mobile        VARCHAR(20) NOT NULL,
     provider      VARCHAR(40) NOT NULL,
     provider_ref  VARCHAR(120),
     code_hash     VARCHAR(100),
+    request_ip    VARCHAR(45),
     status        VARCHAR(20) NOT NULL DEFAULT 'PENDING',
     attempts      INT         NOT NULL DEFAULT 0,
     expires_at    TIMESTAMP   NULL,
     created_at    TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     KEY idx_otp_mobile (mobile),
-    KEY idx_otp_status (status)
+    KEY idx_otp_status (status),
+    KEY idx_otp_mobile_created (mobile, created_at),
+    KEY idx_otp_ip_created (request_ip, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Add request_ip for pre-existing DBs (ignored if it already exists because
+-- spring.sql.init.continue-on-error=true).
+ALTER TABLE otp_requests ADD COLUMN request_ip VARCHAR(45);
 
 -- ===================== Cart / Checkout / Orders / Payments =====================
 

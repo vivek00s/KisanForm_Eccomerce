@@ -24,7 +24,7 @@ products, stock and festival offers.
                                             │
                                  ┌──────────┼──────────┐
                                  │          │          │
-                              Twilio     Payment    Shipping
+            2Factor.in     Payment    Shipping
                                (OTP)     (Stripe)    (future)
 ```
 
@@ -38,7 +38,7 @@ products, stock and festival offers.
 | Data access | **Spring JDBC Template** (no JPA/Hibernate) |
 | Database | MySQL 8 (`kisanfarm`) |
 | Frontend | React 18, Vite 5, React Router 6, Axios |
-| OTP | Twilio (pluggable; mock provider for dev) |
+| OTP | 2Factor.in (SMS/voice OTP; API-key driven) |
 | Payments | Stripe (pluggable; mock provider for dev) |
 | Serving | React production build is served by Spring Boot — one port, one process |
 
@@ -50,7 +50,7 @@ products, stock and festival offers.
 KisanForm/
 ├── pom.xml                         Maven build (Java 21, Spring Boot 3.3.5)
 ├── README.md                       This document
-├── twilio.env                      Local secrets (git-ignored)
+
 ├── verify-flows.ps1                End-to-end smoke test for both flows
 │
 ├── src/main/java/com/kisanfarm/
@@ -68,12 +68,12 @@ KisanForm/
 │   │   ├── AdminAuthService.java   Admin username/password login
 │   │   ├── AdminTokenGuard.java    Validates X-Admin-Token
 │   │   ├── OrderService.java       Checkout; recomputes all prices server-side
-│   │   ├── OtpProvider.java        + MockOtpProvider, TwilioOtpProvider,
-│   │   │                             TwilioSmsOtpProvider
+│   │   ├── OtpProvider.java        + TwoFactorOtpProvider (2Factor.in)
 │   │   └── PaymentProvider.java    + MockPaymentProvider, StripePaymentProvider
 │   ├── controller/                 REST endpoints
 │   └── config/
-│       └── SpaForwardingConfig.java  Forwards SPA routes to index.html
+│       ├── SpaForwardingConfig.java  Forwards SPA routes to index.html
+│       └── TwoFactorConfig.java      RestClient (timeouts) for 2Factor OTP
 │
 ├── src/main/resources/
 │   ├── application.properties      Config (all secrets via env vars)
@@ -170,7 +170,7 @@ Boot running in another terminal.
 | Who | How to sign in |
 |---|---|
 | **Admin / seller** | `http://localhost:8080/admin/login` — username **`admin`**, password **`admin123`** |
-| **Buyer** | `http://localhost:8080/login` — any 10-digit mobile. In mock mode the OTP is printed in the backend console and returned as `devCode` in the API response |
+| **Buyer** | `http://localhost:8080/login` — enter a 10-digit mobile; 2Factor.in sends a real OTP (SMS or voice, per account setup). Enter it to log in. |
 
 The admin is seeded by `schema.sql` with a SHA-256 password hash. Change it
 before any real deployment.
@@ -235,7 +235,7 @@ address step. If a buyer is logged in, their mobile is pre-filled.
 |---|---|---|
 | `GET` | `/api/products` | Product catalogue |
 | `GET` | `/api/products/{id}` | Single product |
-| `POST` | `/api/auth/send-otp` | `{ mobile }` → sends OTP (`devCode` returned in mock mode) |
+| `POST` | `/api/auth/send-otp` | `{ mobile }` → sends OTP via 2Factor.in |
 | `POST` | `/api/auth/verify-otp` | `{ mobile, code }` → `{ token, user }` |
 | `POST` | `/api/checkout` | `{ items:[{productId,quantity}], address:{…} }` → order + payment intent |
 | `POST` | `/api/checkout/confirm` | `{ orderNumber, providerPaymentId }` → finalises the order |
@@ -301,11 +301,184 @@ code changes are needed to switch.
 
 ### OTP — `kisanfarm.otp.provider`
 
-| Value | Behaviour |
+OTP is delivered **exclusively** by 2Factor.in. The only supported value is
+`twofactor` (the default). There is no mock/offline OTP provider: if
+`TWOFACTOR_API_KEY` is missing the application **fails to start** rather than
+silently accepting fake codes.
+
+The `twofactor` provider uses two REST calls:
+
+1. **Send** — `GET https://2factor.in/API/V1/{API_KEY}/SMS/{phone}/AUTOGEN`.
+   2Factor generates the OTP, delivers it (SMS or voice, per account setup), and
+   returns a **Session ID** in the `Details` field. We persist only that session
+   id (as `provider_ref` in `otp_requests`); the raw OTP never reaches our backend.
+2. **Verify** — `GET https://2factor.in/API/V1/{API_KEY}/SMS/VERIFY/{sessionId}/{otp}`.
+   A `Status=Success` / `Details=OTP Matched` response approves the code; anything
+   else (mismatch, expiry, transport error) is treated as a failed check — never a bypass.
+
+The API key is read from the backend environment (`TWOFACTOR_API_KEY`) and is
+never sent to the frontend. The OTP length (6 digits) is controlled by the
+template configured in the 2Factor dashboard. Connect/read timeouts are applied
+so a slow provider cannot hang request threads.
+
+> **Automated tests** do not use a provider at all — `TwoFactorOtpProviderTest`
+> mocks the 2Factor HTTP endpoint with `MockRestServiceServer`, so no real SMS,
+> no account, and no network call are needed to run `mvn test`.
+
+#### OTP flow — detailed walkthrough
+
+KisanFarm uses **passwordless login**: enter a mobile number, receive a one-time
+code, enter it to log in. If no account exists for that number, one is created on
+first successful verification (so "registration" and "login" are the same flow).
+
+**Key idea — we store the session id, not the OTP.** 2Factor generates the code,
+sends it to the user, and hands us back a **session id**. We store only that id
+(`provider_ref`). To verify, we send 2Factor the session id + the typed code. The
+6-digit code never reaches or is stored by our backend, so a DB leak never
+exposes OTPs.
+
+**Components involved**
+
+| Component | Responsibility |
 |---|---|
-| `mock` *(default)* | Generates a 6-digit code, logs it, returns it as `devCode`. No SMS, no account needed. |
-| `twilio-sms` | Generates the code and sends it via the Twilio Messaging API. **Requires a paid Twilio account.** |
-| `twilio` | Twilio **Verify** service — Twilio owns the code. **Requires an upgraded Twilio account.** |
+| `Login.jsx` / `VerifyOtp.jsx` | Collect the mobile and the typed code. Send only `{ mobile }` then `{ mobile, code }`. |
+| `AuthController` | `/api/auth/send-otp`, `/api/auth/verify-otp`; captures the client IP. |
+| `AuthService` | All rules: rate limits, per-IP limit, expiry, attempt cap, single-use verify, user creation, token issue. |
+| `OtpRequestDao(Impl)` | `otp_requests` table access; holds the atomic SQL. |
+| `TwoFactorOtpProvider` | HTTP to 2Factor (AUTOGEN send, VERIFY check). |
+| 2Factor.in | Generates, delivers (SMS/voice), and validates the OTP. Owns the raw code. |
+
+**The `otp_requests` row**
+
+| Column | Meaning |
+|---|---|
+| `mobile` | 10-digit number (normalised) |
+| `provider` | `twofactor` |
+| `provider_ref` | **2Factor session id** (the handle used to verify) |
+| `request_ip` | Client IP captured at send time (per-IP rate limiting) |
+| `status` | `PENDING` → `VERIFIED` / `EXPIRED` / `FAILED` |
+| `attempts` | Count of wrong codes tried |
+| `expires_at` | Validity cutoff (now + 300s) |
+| `created_at` | Drives the rolling 1-hour send counts |
+
+**High-level round trip**
+
+```mermaid
+flowchart LR
+    U["User"] -->|1. enter mobile| FE["Frontend"]
+    FE -->|2. POST /send-otp| BE["Backend<br/>AuthService"]
+    BE -->|3. AUTOGEN| TF["2Factor.in"]
+    TF -->|4. SMS / voice OTP| U
+    TF -->|"session id"| BE
+    BE -->|"store PENDING row"| DB[("otp_requests")]
+    U -->|5. enter code| FE
+    FE -->|6. POST /verify-otp| BE
+    BE -->|7. VERIFY session id + code| TF
+    TF -->|"Success / Error"| BE
+    BE -->|8. token + user| FE
+```
+
+**SEND phase** — `POST /api/auth/send-otp { mobile }`
+
+```mermaid
+flowchart TD
+    A["POST /send-otp {mobile}"] --> B["AuthController<br/>reads client IP<br/>(X-Forwarded-For aware)"]
+    B --> C["AuthService.sendOtp(mobile, ip)<br/>@Transactional"]
+    C --> D["normalize mobile<br/>(strip +91, must be 10 digits)"]
+    D --> E{"IP given?"}
+    E -->|yes| F["count sends from this IP<br/>in last 1 hour"]
+    F --> G{">= 30 per IP?"}
+    G -->|yes| RJ1(["BLOCK: too many<br/>from your network"])
+    G -->|no| H
+    E -->|no| H["count sends for this mobile<br/>in last 1 hour<br/>SELECT ... FOR UPDATE (row lock)"]
+    H --> I{">= 5 per mobile?"}
+    I -->|yes| RJ2(["BLOCK: too many<br/>OTP requests"])
+    I -->|no| J["call 2Factor AUTOGEN"]
+    J --> K{"2Factor OK?"}
+    K -->|"error / timeout"| RJ3(["FAIL cleanly: tx rolls back,<br/>no row saved"])
+    K -->|"Success + session id"| L["INSERT otp_requests<br/>status=PENDING, provider_ref=sessionId,<br/>request_ip=ip, expires_at=now+300s"]
+    L --> M["COMMIT (releases lock)"]
+    M --> N(["return {sent:true}"])
+
+    style RJ1 fill:#ffd9d9
+    style RJ2 fill:#ffd9d9
+    style RJ3 fill:#ffd9d9
+    style N fill:#d9ffd9
+```
+
+Two rate limits apply, both counting sends in a rolling 1-hour window:
+
+| Limit | Default | Protects against |
+|---|---|---|
+| **Per mobile** | 5 / hour | SMS-bombing one number; endless retries. |
+| **Per IP** | 30 / hour | One source spraying OTPs across many numbers. Higher cap tolerates shared office/campus/carrier-NAT networks. |
+
+The per-mobile count uses `SELECT ... FOR UPDATE` inside the transaction so two
+simultaneous requests for the same number cannot both pass the limit — the second
+blocks on the row lock until the first commits, then re-reads the true count.
+
+**VERIFY phase** — `POST /api/auth/verify-otp { mobile, code }`
+
+```mermaid
+flowchart TD
+    A["POST /verify-otp {mobile, code}"] --> B["AuthService.verifyOtp<br/>@Transactional"]
+    B --> C["load latest PENDING row for mobile"]
+    C --> D{"found?"}
+    D -->|no| RJ1(["REJECT: no active OTP"])
+    D -->|yes| E{"expired?"}
+    E -->|yes| F["status=EXPIRED"] --> RJ2(["REJECT: expired"])
+    E -->|no| G{"attempts >= 5?"}
+    G -->|yes| H["status=FAILED"] --> RJ3(["REJECT: too many attempts"])
+    G -->|no| I["session id taken FROM DB ROW<br/>(never from the client)"]
+    I --> J["call 2Factor VERIFY<br/>(session id + code)"]
+    J --> K{"match?"}
+    K -->|no| L["attempts + 1"] --> RJ4(["REJECT: invalid OTP"])
+    K -->|yes| M["ATOMIC claim:<br/>UPDATE SET status=VERIFIED<br/>WHERE id=? AND status=PENDING"]
+    M --> N{"rows updated == 1?"}
+    N -->|no| RJ5(["REJECT: already used<br/>(replay / race)"])
+    N -->|yes| O["find or create user"]
+    O --> P["issue token"] --> Q(["return {token, user}"])
+
+    style RJ1 fill:#ffd9d9
+    style RJ2 fill:#ffd9d9
+    style RJ3 fill:#ffd9d9
+    style RJ4 fill:#ffd9d9
+    style RJ5 fill:#ffd9d9
+    style Q fill:#d9ffd9
+```
+
+Three verify-phase guards:
+
+1. **Session ownership** — the 2Factor session id is read from our stored
+   `PENDING` row, never supplied by the client (client sends only `{mobile, code}`).
+2. **Attempt cap** — 5 wrong codes marks the row `FAILED`; combined with the
+   5-minute expiry, brute-forcing a 6-digit code is infeasible.
+3. **Single-use & concurrency-safe** — the `PENDING → VERIFIED` transition is one
+   atomic `UPDATE ... WHERE id=? AND status='PENDING'`. Only the first caller
+   updates 1 row and proceeds; a replay or a concurrent duplicate updates 0 rows
+   and is rejected, so a verified OTP can never authenticate twice.
+
+**Status lifecycle of one OTP request**
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING: send-otp succeeds
+    PENDING --> VERIFIED: correct code (atomic claim wins)
+    PENDING --> EXPIRED: used after expires_at
+    PENDING --> FAILED: 5 wrong attempts
+    VERIFIED --> [*]
+    EXPIRED --> [*]
+    FAILED --> [*]
+```
+
+**By design, the backend never:** stores the raw OTP (only the session id); logs
+the OTP or API key (mobile and IP are masked in logs); exposes the key to the
+frontend; or starts without `TWOFACTOR_API_KEY` (no silent fake-OTP fallback).
+
+> **Login token caveat:** the token returned after verification is currently an
+> opaque base64 string that is **not yet validated on later requests** (no
+> signature/expiry/server-side check). Replace it with a verifiable token
+> (e.g. signed JWT) + an enforcing filter before production.
 
 ### Payments — `kisanfarm.payment.provider`
 
@@ -314,39 +487,48 @@ code changes are needed to switch.
 | `mock` *(default)* | Creates a fake payment intent that verifies as successful. |
 | `stripe` | Creates a real Stripe PaymentIntent server-side; `verifyPayment` re-checks the status with Stripe, so a frontend success screen alone is never trusted. |
 
-### ⚠ Twilio trial limitation (encountered on this account)
+### 2Factor.in account setup
 
-A Twilio **trial** account cannot deliver this app's OTP:
+To send real SMS with `OTP_PROVIDER=twofactor` you need a 2Factor.in account —
+there is no assumed free tier or sandbox:
 
-- **Verify** is paywalled — the Services page only offers *Upgrade*.
-- **Plain SMS** rejects custom text with
-  `Invalid template name. Trial accounts can only use predefined SMS templates.`
+1. Sign up at [2factor.in](https://2factor.in) and copy your **API key** from the dashboard.
+2. Add SMS credits to the account (OTP SMS is a paid service).
+3. For Indian numbers, complete **DLT / sender-ID registration** and configure a
+   **6-digit OTP SMS template** in the dashboard (regulatory requirement for
+   transactional SMS in India; the template also fixes the OTP length).
+4. Provide the key to the backend via the `TWOFACTOR_API_KEY` environment
+   variable before starting — set it in your IDE run configuration (e.g. Eclipse
+   Run Configurations → Environment tab) or export it in the terminal. Never
+   hardcode or commit the key.
 
-Both paths were implemented and tested against the live API; both are blocked by
-the trial tier. **Upgrading the Twilio account is required for real SMS.** Until
-then the project runs on `OTP_PROVIDER=mock`, which exercises the complete login
-flow locally.
+Without `TWOFACTOR_API_KEY` the backend will not start (by design — no fake-OTP
+fallback). A real OTP is delivered as **SMS** only when the account has an
+approved transactional SMS template/sender ID (DLT); otherwise 2Factor falls back
+to **voice-call** OTP, which still works end to end.
 
 ---
 
 ## 12. Configuration
 
 All secrets are read from environment variables, with safe local defaults. Nothing
-sensitive is committed — `twilio.env`, `*.env` and build artefacts are in
-`.gitignore`.
+sensitive is committed — `application.properties` only references env vars (e.g.
+`${TWOFACTOR_API_KEY:}`), and `.env`/`*.env` plus build artefacts are in `.gitignore`.
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `DB_HOST` / `DB_PORT` / `DB_NAME` | `localhost` / `3306` / `kisanfarm` | MySQL connection |
 | `DB_USERNAME` / `DB_PASSWORD` | `root` / `root` | MySQL credentials |
 | `SERVER_PORT` | `8080` | HTTP port |
-| `OTP_PROVIDER` | `mock` | `mock` \| `twilio-sms` \| `twilio` |
-| `TWILIO_ACCOUNT_SID` | — | Twilio account SID |
-| `TWILIO_AUTH_TOKEN` | — | Twilio auth token |
-| `TWILIO_VERIFY_SERVICE_SID` | — | Required for the `twilio` provider |
-| `TWILIO_FROM_NUMBER` | — | Required for `twilio-sms` |
+| `OTP_PROVIDER` | `twofactor` | Only `twofactor` is supported. |
+| `TWOFACTOR_API_KEY` | — | 2Factor.in API key (backend only). **Required** — the app will not start without it. |
 | `PAYMENT_PROVIDER` | `mock` | `mock` \| `stripe` |
 | `STRIPE_SECRET_KEY` | — | Stripe secret key (backend only) |
+
+2Factor tuning (in `application.properties`): `kisanfarm.twofactor.base-url`,
+`kisanfarm.twofactor.default-country-code` (`+91`),
+`kisanfarm.twofactor.connect-timeout-ms` (5000),
+`kisanfarm.twofactor.read-timeout-ms` (10000).
 
 Tuning knobs in `application.properties`: OTP length, expiry (300 s), resend
 cooldown (30 s), max sends per hour (5), max verify attempts (5), delivery charge
@@ -359,10 +541,11 @@ cooldown (30 s), max sends per hour (5), max verify attempts (5), delivery charg
 - **Server-side pricing** — the browser's amount is discarded; totals are recomputed from the database.
 - **Stock validation** — orders above available stock are rejected, preventing overselling.
 - **Admin authorisation** — every product write requires `X-Admin-Token`; unauthenticated calls get 403.
-- **OTP hardening** — expiry, resend rate limit (5/hour), max 5 verify attempts, and the raw OTP is **never stored** (hash only; with Twilio Verify, Twilio holds it).
-- **Constant-time comparison** for OTP and admin password hashes.
+- **OTP hardening** — expiry, resend rate limit (5/hour), max 5 verify attempts, and the raw OTP is **never stored** (2Factor owns the code; we keep only its session id).
+- **No fake-OTP fallback** — OTP is 2Factor-only; the app refuses to start without `TWOFACTOR_API_KEY`, so a misconfigured deploy can never accept fake codes.
+- **Constant-time comparison** for admin password hashes.
 - **Parameterised SQL** everywhere — no string-concatenated queries, so no SQL injection.
-- **Secrets stay server-side** — no provider key is ever sent to React; `.gitignore` covers `twilio.env` and `*.env`.
+- **Secrets stay server-side** — no provider key is ever sent to React; the key is supplied via the `TWOFACTOR_API_KEY` env var and never committed (`application.properties` only references it).
 - **Idempotent payment confirmation** — re-confirming an order does not duplicate or double-apply it.
 - **Price snapshots** — `order_items` stores the purchase-time price, so later catalogue changes never alter historical orders.
 
@@ -414,7 +597,8 @@ while leaving `/api/**` and real static assets untouched.
 
 These are deliberately not implemented yet:
 
-1. **Real SMS OTP** — needs a paid Twilio account (see §11).
+1. **Real SMS OTP** — wired to 2Factor.in (`OTP_PROVIDER=twofactor`); needs a
+   2Factor account with SMS credits and a DLT-approved 6-digit template (see §11).
 2. **Stripe card UI** — the backend creates PaymentIntents, but the React card
    form (Stripe Elements) is not wired, so `PAYMENT_PROVIDER=stripe` cannot
    complete a payment from the UI yet. `mock` works end to end.
