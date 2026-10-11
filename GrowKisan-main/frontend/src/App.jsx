@@ -11,6 +11,7 @@ import AdminLogin from './pages/admin/AdminLogin'
 import AdminDashboard from './pages/admin/AdminDashboard'
 import AdminProducts from './pages/admin/AdminProducts'
 import AdminRoute from './components/AdminRoute'
+import RequireAuth from './components/RequireAuth'
 
 export default function App() {
   return (

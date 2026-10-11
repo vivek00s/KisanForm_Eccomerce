@@ -57,6 +57,65 @@ export default function Checkout() {
     setStep(2)
   }
 
+  // Open Razorpay Checkout and resolve with { paymentId, signature } on success.
+  // res.clientSecret carries the public Razorpay Key ID; res.providerPaymentId is
+  // the Razorpay order id created server-side.
+  function openRazorpay(res) {
+    return new Promise((resolve, reject) => {
+      if (!window.Razorpay) {
+        reject(new Error('Razorpay could not load. Check your connection and try again.'))
+        return
+      }
+      const rzp = new window.Razorpay({
+        key: res.clientSecret, // public Key ID (never the secret)
+        order_id: res.providerPaymentId, // Razorpay order id from the backend
+        amount: Math.round(Number(res.amount) * 100), // paise, for display only
+        currency: 'INR',
+        name: 'KisanFarm',
+        description: `Order ${res.orderNumber}`,
+        prefill: {
+          name: address.name,
+          contact: address.mobile,
+          // A valid email helps UPI collect flows render.
+          email: 'customer@kisanfarm.test',
+        },
+        notes: { order_number: res.orderNumber },
+        theme: { color: '#2e7d32' },
+        // Explicitly surface UPI (Google Pay / PhonePe / QR) alongside cards,
+        // netbanking and wallets, and show UPI first in the method list. UPI
+        // must also be enabled on the Razorpay account (Dashboard > Payment
+        // Methods). On desktop it appears as a VPA field + QR; the native
+        // app-intent buttons show on a mobile browser.
+        config: {
+          display: {
+            blocks: {
+              upiBlock: {
+                name: 'Pay using UPI',
+                instruments: [{ method: 'upi' }],
+              },
+            },
+            sequence: ['block.upiBlock'],
+            preferences: { show_default_blocks: true },
+          },
+        },
+        method: {
+          upi: true,
+          card: true,
+          netbanking: true,
+          wallet: true,
+        },
+        handler: (r) =>
+          resolve({ paymentId: r.razorpay_payment_id, signature: r.razorpay_signature }),
+        modal: {
+          ondismiss: () => reject(new Error('Payment was cancelled.')),
+        },
+      })
+      rzp.on('payment.failed', (resp) =>
+        reject(new Error(resp?.error?.description || 'Payment failed. Please try again.')))
+      rzp.open()
+    })
+  }
+
   async function pay() {
     setBusy(true)
     setError('')
@@ -65,7 +124,17 @@ export default function Checkout() {
       // 1) Backend creates the order + payment intent (recomputes the amount).
       const res = await checkout(cartLines, address)
 
-      // 2) Complete payment.
+      // 2) Complete payment, per active provider.
+      if (res.provider === 'razorpay') {
+        // Opens the Razorpay screen (UPI / Google Pay / PhonePe / cards / QR).
+        const { paymentId, signature } = await openRazorpay(res)
+        // 3) Backend verifies the signature before marking the order paid.
+        const order = await confirmPayment(res.orderNumber, paymentId, signature)
+        clearCart()
+        navigate('/order-success', { state: { order }, replace: true })
+        return
+      }
+
       if (res.provider === 'stripe' && window.Stripe) {
         // Real Stripe flow would confirm the card payment here using res.clientSecret.
         // (Requires Stripe publishable key + Elements; wired when Stripe is enabled.)
@@ -79,7 +148,7 @@ export default function Checkout() {
       clearCart()
       navigate('/order-success', { state: { order }, replace: true })
     } catch (err) {
-      setError(err?.response?.data?.message || 'Checkout failed. Please try again.')
+      setError(err?.response?.data?.message || err?.message || 'Checkout failed. Please try again.')
     } finally {
       setBusy(false)
     }

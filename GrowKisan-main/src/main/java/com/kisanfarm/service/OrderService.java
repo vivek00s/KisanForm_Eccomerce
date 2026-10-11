@@ -116,13 +116,16 @@ public class OrderService {
         order.setId(orderId);
         orderDao.saveItems(orderId, items);
 
-        // Create payment intent for the backend-computed total.
+        // Create payment intent/order for the backend-computed total.
         PaymentProvider.CreateResult pr = paymentProvider.createPayment(order.getOrderNumber(), total, "INR");
 
         Payment payment = new Payment();
         payment.setOrderId(orderId);
         payment.setProvider(paymentProvider.name());
+        // For Razorpay this is the gateway order id; the actual payment id is
+        // filled in at confirm time once the customer pays.
         payment.setProviderPaymentId(pr.providerPaymentId());
+        payment.setProviderOrderId(pr.providerPaymentId());
         payment.setStatus("PENDING");
         payment.setAmount(total);
         payment.setCurrency("INR");
@@ -135,7 +138,7 @@ public class OrderService {
 
     /** Confirm a payment (verifies with the provider) and finalize the order. */
     @Transactional
-    public Order confirmPayment(String orderNumber, String providerPaymentId) {
+    public Order confirmPayment(String orderNumber, String providerPaymentId, String signature) {
         Order order = orderDao.findByOrderNumber(orderNumber)
                 .orElseThrow(() -> new CheckoutException("Order not found."));
         Payment payment = paymentDao.findByOrderId(order.getId())
@@ -147,8 +150,12 @@ public class OrderService {
             return order;
         }
 
-        boolean ok = paymentProvider.verifyPayment(
-                providerPaymentId != null ? providerPaymentId : payment.getProviderPaymentId());
+        // The stored providerPaymentId is the gateway order id (Razorpay) or the
+        // PaymentIntent id (Stripe). For Razorpay, verification is done against the
+        // stored order id + the client-returned payment id and signature.
+        PaymentProvider.Confirmation confirmation =
+                new PaymentProvider.Confirmation(providerPaymentId, signature);
+        boolean ok = paymentProvider.verifyPayment(confirmation, payment.getProviderOrderId());
 
         if (!ok) {
             paymentDao.updateStatus(payment.getId(), "FAILED", providerPaymentId, "Verification failed");

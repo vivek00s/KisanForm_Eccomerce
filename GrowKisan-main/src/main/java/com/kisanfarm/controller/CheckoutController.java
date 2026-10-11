@@ -48,7 +48,10 @@ public class CheckoutController {
 
     @PostMapping("/checkout/confirm")
     public ResponseEntity<Map<String, Object>> confirm(@RequestBody Map<String, String> body) {
-        Order order = orderService.confirmPayment(body.get("orderNumber"), body.get("providerPaymentId"));
+        Order order = orderService.confirmPayment(
+                body.get("orderNumber"),
+                body.get("providerPaymentId"),   // Razorpay: razorpay_payment_id
+                body.get("signature"));          // Razorpay: razorpay_signature
         return ResponseEntity.ok(toOrderMap(order));
     }
 

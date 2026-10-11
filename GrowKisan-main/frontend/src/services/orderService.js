@@ -6,9 +6,11 @@ export async function checkout(items, address) {
   return res.data // { orderNumber, amount, provider, providerPaymentId, clientSecret, order }
 }
 
-// Confirm payment after the gateway step.
-export async function confirmPayment(orderNumber, providerPaymentId) {
-  const res = await api.post('/checkout/confirm', { orderNumber, providerPaymentId })
+// Confirm payment after the gateway step. For Razorpay, providerPaymentId is
+// razorpay_payment_id and signature is razorpay_signature; the backend verifies
+// the signature before marking the order paid.
+export async function confirmPayment(orderNumber, providerPaymentId, signature) {
+  const res = await api.post('/checkout/confirm', { orderNumber, providerPaymentId, signature })
   return res.data // order
 }
 

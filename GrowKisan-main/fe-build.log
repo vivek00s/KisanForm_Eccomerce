@@ -1,0 +1,14 @@
+
+> kisanfarm-frontend@1.0.0 build
+> vite build
+
+[36mvite v5.4.21 [32mbuilding for production...[36m[39m
+transforming...
+[32m✓[39m 117 modules transformed.
+rendering chunks...
+computing gzip size...
+[2m../src/main/resources/static/[22m[32mindex.html                 [39m[1m[2m  0.86 kB[22m[1m[22m[2m │ gzip:  0.50 kB[22m
+[2m../src/main/resources/static/[22m[35massets/index-B6vCs3Ps.css  [39m[1m[2m 23.28 kB[22m[1m[22m[2m │ gzip:  4.81 kB[22m
+[2m../src/main/resources/static/[22m[36massets/index-Ct6KbkWB.js   [39m[1m[2m257.23 kB[22m[1m[22m[2m │ gzip: 84.15 kB[22m
+[32m✓ built in 8.72s[39m
+FE_BUILD_OK  

@@ -26,8 +26,10 @@ public class MockPaymentProvider implements PaymentProvider {
     }
 
     @Override
-    public boolean verifyPayment(String providerPaymentId) {
+    public boolean verifyPayment(Confirmation confirmation, String storedProviderPaymentId) {
         // In mock mode, any created payment is considered successful.
-        return providerPaymentId != null && providerPaymentId.startsWith("mock_pi_");
+        String id = confirmation != null && confirmation.providerPaymentId() != null
+                ? confirmation.providerPaymentId() : storedProviderPaymentId;
+        return id != null && id.startsWith("mock_pi_");
     }
 }
